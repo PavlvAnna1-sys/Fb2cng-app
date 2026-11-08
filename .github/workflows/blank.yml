@@ -1,0 +1,54 @@
+name: Build APK
+on:
+  workflow_dispatch:      # ручной запуск кнопкой Run workflow
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Если вы сами положили app/src/main/jniLibs/arm64-v8a/libfb2cng.so в репозиторий, этот шаг пропускается.
+      - name: Download fb2cng (linux/arm64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DEST=app/src/main/jniLibs/arm64-v8a/libfb2cng.so
+          if [ -f "$DEST" ]; then echo "binary already in repo"; exit 0; fi
+          mkdir -p dl app/src/main/jniLibs/arm64-v8a
+          gh release list -R rupor-github/fb2cng -L 5
+          gh release download -R rupor-github/fb2cng -D dl \
+            --pattern '*[Ll]inux*[Aa]rm64*' --pattern '*[Ll]inux*[Aa]arch64*' \
+            || { echo "Не нашёл linux/arm64 в релизах: положите бинарник в репозиторий вручную"; ls dl; exit 1; }
+          ls -l dl
+          cd dl
+          for f in *.zip; do [ -e "$f" ] && unzip -oq "$f"; done || true
+          for f in *.tar.gz *.tgz; do [ -e "$f" ] && tar xzf "$f"; done || true
+          BIN=$(find . -type f -name 'fb2cng*' ! -name '*.zip' ! -name '*.tar.gz' ! -name '*.sig' ! -name '*.minisig' | head -1)
+          [ -z "$BIN" ] && BIN=$(ls | head -1)
+          echo "using $BIN"
+          cp "$BIN" "../$DEST"
+          chmod +x "../$DEST"
+          file "../$DEST" || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fb2cngApp-debug
+          path: app/build/outputs/apk/debug/*.apk
+          
